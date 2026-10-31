@@ -25,7 +25,9 @@
 #include "map/roam_region.h"
 
 #include "common/utils.h"
+#include "common/xirand.h"
 
+#include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <memory>
@@ -228,4 +230,96 @@ TEST_CASE("pathfind: a region mob that cannot sample a leg walks back onto its r
     const auto destination = pathFind.GetDestination();
     CHECK(region.contains(destination.x, destination.z));
     CHECK_FALSE(region.contains(ownerPtr->position().x, ownerPtr->position().z));
+}
+
+TEST_CASE("pathfind: roam steps stay on the Manaclipper deck", "[pathfind][region]")
+{
+    // Manaclipper deck outline.
+    const RoamRegion::Ring deck{
+        { -11.15f, -3.0f, -5.81f }, { -9.66f, -3.0f, -10.61f }, { -9.78f, -3.0f, -15.83f }, { -4.79f, -3.0f, -18.21f }, { 0.13f, -3.0f, -16.25f }, { 4.65f, -3.0f, -17.67f }, { 9.99f, -3.0f, -15.77f }, { 9.51f, -3.0f, -10.79f }, { 11.18f, -3.0f, -6.05f }, { 10.05f, -3.0f, 3.86f }, { 0.04f, -3.0f, 1.60f }, { -9.95f, -3.0f, 3.68f }
+    };
+    const RoamRegion region(deck, {});
+    FlatNavMesh      navMesh;
+    const position_t anchor{ 0.0f, -3.0f, -8.0f, 0, 0 };
+    for (uint64 seed = 0; seed < 200; ++seed)
+    {
+        xirand::rng().seed(seed);
+        auto      owner = std::make_unique<StubOwner>(anchor, navMesh);
+        auto*     actor = owner.get();
+        CPathFind path(std::move(owner));
+        unsigned  movedFrames     = 0;
+        unsigned  lateMovedFrames = 0;
+        for (int frame = 0; frame < 500; ++frame)
+        {
+            if (!path.IsFollowingPath())
+            {
+                path.RoamAround(anchor, 30.0f, 1, 4, xi::RoamFlag::None, &region);
+            }
+            const auto before = actor->position();
+            path.FollowPath(timer::now() + std::chrono::milliseconds(frame * 400));
+            const auto& p     = actor->position();
+            const bool  moved = p.x != before.x || p.z != before.z;
+            movedFrames += moved;
+            lateMovedFrames += frame >= 400 && moved;
+            INFO("seed=" << seed << " frame=" << frame << " x=" << p.x << " z=" << p.z);
+            REQUIRE(region.contains(p.x, p.z));
+        }
+        REQUIRE(movedFrames > 0);
+        REQUIRE(lateMovedFrames > 0);
+    }
+}
+
+TEST_CASE("pathfind: roam steps do not cross holes", "[pathfind][region]")
+{
+    const auto       region = squareWithHole();
+    FlatNavMesh      navMesh;
+    const position_t anchor{ 39.0f, -10.0f, 50.0f, 0, 0 };
+    for (uint64 seed = 0; seed < 50; ++seed)
+    {
+        xirand::rng().seed(seed);
+        auto      owner = std::make_unique<StubOwner>(anchor, navMesh);
+        auto*     actor = owner.get();
+        CPathFind path(std::move(owner));
+        unsigned  movedFrames     = 0;
+        unsigned  lateMovedFrames = 0;
+        for (int frame = 0; frame < 500; ++frame)
+        {
+            if (!path.IsFollowingPath())
+            {
+                path.RoamAround(anchor, 30.0f, 1, 4, xi::RoamFlag::None, &region);
+            }
+            const auto before = actor->position();
+            path.FollowPath(timer::now() + std::chrono::milliseconds(frame * 400));
+            const auto& p     = actor->position();
+            const bool  moved = p.x != before.x || p.z != before.z;
+            movedFrames += moved;
+            lateMovedFrames += frame >= 400 && moved;
+            INFO("seed=" << seed << " frame=" << frame << " x=" << p.x << " z=" << p.z);
+            REQUIRE(region.contains(p.x, p.z));
+        }
+        REQUIRE(movedFrames > 0);
+        REQUIRE(lateMovedFrames > 0);
+    }
+}
+
+TEST_CASE("pathfind: a mob outside its region walks back in", "[pathfind][region]")
+{
+    const RoamRegion::Ring outer{ { 0.0f, -10.0f, 0.0f }, { 100.0f, -10.0f, 0.0f }, { 100.0f, -10.0f, 100.0f }, { 0.0f, -10.0f, 100.0f } };
+    const RoamRegion       region(outer, {});
+    FlatNavMesh            navMesh;
+    const position_t       stranded{ -10.0f, -10.0f, 50.0f, 0, 0 };
+    xirand::rng().seed(0);
+    auto      owner = std::make_unique<StubOwner>(stranded, navMesh);
+    auto*     actor = owner.get();
+    CPathFind path(std::move(owner));
+    REQUIRE(path.RoamAround(stranded, 10.0f, 1, 1, xi::RoamFlag::None, &region));
+    const auto destination = path.GetDestination();
+    REQUIRE(region.contains(destination.x, destination.z));
+    REQUIRE_FALSE(region.contains(actor->position().x, actor->position().z));
+    for (int frame = 0; frame < 500 && path.IsFollowingPath(); ++frame)
+    {
+        path.FollowPath(timer::now() + std::chrono::milliseconds(frame * 400));
+    }
+    CHECK(region.contains(actor->position().x, actor->position().z));
+    CHECK(isWithinDistance(actor->position(), destination, 0.1f, true));
 }

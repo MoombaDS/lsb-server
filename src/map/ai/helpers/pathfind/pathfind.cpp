@@ -364,7 +364,32 @@ auto CPathFind::FollowPath(const timer::time_point tick, const float stepCap) ->
             return 0.0f;
         }();
 
-        const float moved = pathfind::stepTowards(ownerPos, targetPoint.position, budget, stopShort);
+        const auto  beforeStep = ownerPos;
+        const float moved      = pathfind::stepTowards(ownerPos, targetPoint.position, budget, stopShort);
+
+        // Rounded headings and waypoint tolerance can take a step outside the region.
+        // Allow an outside mob to walk back in before enforcing the boundary.
+        if (roamRegion_ && (!recoveringToRegion_ || roamRegion_->contains(beforeStep.x, beforeStep.z)))
+        {
+            recoveringToRegion_ = false;
+            const float length  = distance(beforeStep, ownerPos, true);
+            if (length > 0.0f)
+            {
+                const Vector3 direction{ .x = (ownerPos.x - beforeStep.x) / length, .y = 0.0f, .z = (ownerPos.z - beforeStep.z) / length };
+                const float   allowed = roamRegion_->clampToRegion(beforeStep, direction, length);
+                if (allowed < length)
+                {
+                    const float fraction = allowed / length;
+                    ownerPos.x           = beforeStep.x + (ownerPos.x - beforeStep.x) * fraction;
+                    ownerPos.y           = beforeStep.y + (ownerPos.y - beforeStep.y) * fraction;
+                    ownerPos.z           = beforeStep.z + (ownerPos.z - beforeStep.z) * fraction;
+                    distanceMoved_ += moved * fraction;
+                    path_.finish();
+                    break;
+                }
+            }
+        }
+
         distanceMoved_ += moved;
         budget -= moved;
     }
@@ -534,7 +559,7 @@ auto CPathFind::FindRandomPath(const position_t& start, float maxRadius, uint8 m
         if (target)
         {
             turnPoints_.push_back(*target);
-            recoveringToRegion_ = true;
+            recoveringToRegion_ = !region->contains(owner_->position().x, owner_->position().z);
         }
     }
 
