@@ -30,8 +30,11 @@ end
 
 describe('Chocobo Circuit race', function()
     it('posts a field without a result, then saves the result when the race runs', function()
-        -- Far past any real race number, so no saved row matches.
+        -- Avoid reusing a saved race when the suite runs again.
         local raceNo = GetSystemTime()
+        while LoadChocoboRaceResult(raceNo) do
+            raceNo = raceNo + 1
+        end
 
         xi.chocoboRacing.postRace(raceNo)
         local posted = LoadChocoboRaceResult(raceNo)
